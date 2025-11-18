@@ -44,6 +44,7 @@ def extract_depot_id(page) -> str:
 def depot_id_to_filename(depot_id: str) -> str:
     """
     Convert depot_id '2104' → filename '104V_CL.pdf'
+    Rule: drop first digit, add 'V', then '_CL.pdf'
     """
     if depot_id == "UNKNOWN" or not depot_id.isdigit() or len(depot_id) < 2:
         base = depot_id
@@ -59,7 +60,7 @@ st.set_page_config(page_title="Depot Call List Splitter", page_icon="📄", layo
 # ---- Display the logo ---- #
 try:
     st.image("messer-logo (1).svg", width=180)
-except:
+except Exception:
     st.warning("⚠️ Logo file not found. Make sure 'messer-logo (1).svg' is in the same folder as app.py")
 
 st.title("📄 Depot Call List Splitter")
@@ -69,6 +70,7 @@ st.markdown(
 
     - Detect the **Depot ID** on each page  
     - Group pages by Depot ID  
+    - If a page has **no Depot ID match**, it will be added to the **previous depot's PDF**  
     - Rename each PDF using the rule:  
       - Depot ID `2104` → `104V_CL.pdf`  
     - Provide a **ZIP download** of all files  
@@ -88,21 +90,62 @@ if uploaded_file:
             num_pages = len(reader.pages)
             st.write(f"Detected **{num_pages}** pages.")
 
+            # depot_id -> PdfWriter
             depot_writers = {}
 
+            # Track last valid depot ID to attach UNKNOWN pages
+            last_depot_id = None
+
+            # For reporting
+            unknown_attached = []   # list of dicts: {"page": n, "assigned_to": depot_id}
+            unknown_unassigned = [] # pages where we truly had no previous depot
+
+            # Process each page
             for page_index, page in enumerate(reader.pages):
-                depot_id = extract_depot_id(page)
+                page_num = page_index + 1
+                depot_id_raw = extract_depot_id(page)
 
-                if depot_id not in depot_writers:
-                    depot_writers[depot_id] = PdfWriter()
+                # Decide which depot ID we actually use for this page
+                if depot_id_raw == "UNKNOWN":
+                    if last_depot_id is not None:
+                        # Attach to previous depot
+                        effective_depot_id = last_depot_id
+                        unknown_attached.append(
+                            {"page": page_num, "assigned_to": last_depot_id}
+                        )
+                    else:
+                        # No previous depot: keep as UNKNOWN, but log separately
+                        effective_depot_id = "UNKNOWN"
+                        unknown_unassigned.append(page_num)
+                else:
+                    effective_depot_id = depot_id_raw
+                    last_depot_id = depot_id_raw  # update last known valid depot
 
-                depot_writers[depot_id].add_page(page)
-                st.write(f"Page {page_index + 1}: Depot ID `{depot_id}`")
+                if effective_depot_id not in depot_writers:
+                    depot_writers[effective_depot_id] = PdfWriter()
 
+                depot_writers[effective_depot_id].add_page(page)
+                st.write(f"Page {page_num}: extracted Depot ID `{depot_id_raw}`, "
+                         f"assigned to group `{effective_depot_id}`")
+
+            # Show depot IDs actually used
             depot_ids = list(depot_writers.keys())
-            st.write("### Depot IDs identified:")
+            st.write("### Depot groups created:")
             st.json(depot_ids)
 
+            # Show a small report for UNKNOWN handling
+            if unknown_attached:
+                st.warning("Some pages had no Depot ID match and were attached to the previous depot:")
+                st.table(unknown_attached)
+
+            if unknown_unassigned:
+                st.error(
+                    "Some pages had no Depot ID and no previous depot to attach to. "
+                    "They were grouped under 'UNKNOWN'."
+                )
+                st.write("Pages grouped as UNKNOWN:", unknown_unassigned)
+
+            # Create ZIP in memory
             zip_buffer = io.BytesIO()
             with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zip_file:
                 for depot_id, writer in depot_writers.items():
@@ -119,7 +162,7 @@ if uploaded_file:
             st.success("Splitting complete! Download your ZIP below:")
 
             st.download_button(
-                label="⬇️ Download ZIP",
+                label="⬇️ Download split PDFs as ZIP",
                 data=zip_buffer,
                 file_name="call_lists_by_depot.zip",
                 mime="application/zip",
