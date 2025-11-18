@@ -60,7 +60,7 @@ def extract_shipping_point_from_text(text: str) -> str:
     We look for a line like:
         Shipping Point    :  123V  Messer St Hubert
 
-    Rules from you:
+    Rules:
     1. On each page there is "Shipping Point : 123V" (123V is variable).
     2. If there is no 3-digits+V next to Shipping Point, disregard the page.
     """
